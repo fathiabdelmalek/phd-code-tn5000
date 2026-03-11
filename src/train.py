@@ -25,15 +25,25 @@ def train():
 
     # 3. Get Data and Model
     if 'yolo' in args.model.lower():
+        abs_exp_dir = os.path.abspath(exp_dir)
         if args.resume:
             print(f"🔄 Resuming from: {last_ckpt}")
+            import ultralytics.nn.tasks
+            from src.models.common.cord_att import CoordAtt
+            ultralytics.nn.tasks.CoordAtt = CoordAtt
             model = YOLO(last_ckpt)
-            model.train(resume=True)
+            model.train(
+                project = os.path.dirname(abs_exp_dir),
+                name = os.path.basename(abs_exp_dir),
+                exist_ok = True,
+                plots = True,
+                save = True,
+                resume = True
+            )
         else:
             print(f"🚀 Training started. Results will be saved to: {exp_dir}")
             data_cfg = get_dataloader(args.model, args.data)
             model = get_model(args.model, weights=args.weights)
-            abs_exp_dir = os.path.abspath(exp_dir)
             model.train(
                 data = data_cfg,
                 batch = args.batch,
