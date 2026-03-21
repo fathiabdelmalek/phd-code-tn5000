@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from tqdm import tqdm
 
 # ── Your PASCAL VOC datasets on Drive ────────────────────────────────
-ROOT_DIR = '/data'
+ROOT_DIR = '/home/fathi/dev/research/phd/code/tn5000/data'
 VOC_ROOT = os.path.join(ROOT_DIR, 'voc')
 VOC_IMAGES = os.path.join(VOC_ROOT, 'JPEGImages')
 VOC_ANNOTS = os.path.join(VOC_ROOT, 'Annotations')

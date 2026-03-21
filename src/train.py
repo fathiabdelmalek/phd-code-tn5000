@@ -1,75 +1,67 @@
-import os, argparse
+import argparse
 
-from .datasets.factory import get_dataloader
-from .models.registery import get_model
-from src.utils.transforms import get_train_transform
+from src.core.trainers.registry import get_trainer
+from src.utils.config import load_config
+from src.utils.logger import get_logger
 from src.utils.setup_experiment import setup_experiment
-
-from ultralytics import YOLO
 
 
 def train():
-    # 1. Parse Arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", type=str, required=True, help="yolo26_ca, faster_rcnn, fcos, etc.")
-    parser.add_argument("-e", "--epochs", type=int, default=50)
-    parser.add_argument("-b", "--batch", type=int, default=8)
-    parser.add_argument("-d", "--data", type=str, default="data/")
-    parser.add_argument("-w", "--weights", type=str, default=None, help="Path to custom weights (.pt)")
-    parser.add_argument("-r", "--resume", action="store_true", help="Resume from last checkpoint")
+    parser = argparse.ArgumentParser(description="Train a detection model")
+    parser.add_argument(
+        "-m",
+        "--model",
+        type=str,
+        required=True,
+        help="Model name (e.g., yolo26n_ca, faster_rcnn, fcos)",
+    )
+    parser.add_argument(
+        "-e", "--epochs", type=int, default=None, help="Number of training epochs"
+    )
+    parser.add_argument("-b", "--batch", type=int, default=4, help="Batch size")
+    parser.add_argument(
+        "-d", "--data", type=str, default="data/", help="Path to data directory"
+    )
+    parser.add_argument(
+        "-w", "--weights", type=str, default=None, help="Path to custom weights file"
+    )
+    parser.add_argument(
+        "-r", "--resume", action="store_true", help="Resume from last checkpoint"
+    )
+    parser.add_argument(
+        "-c", "--config", type=str, default=None, help="Path to config YAML file"
+    )
     args = parser.parse_args()
 
-    # 2. Setup automatic experiment folder
-    exp_dir = setup_experiment(args.model)
-    last_ckpt = os.path.join(exp_dir, "weights", "last.pt")
+    config = load_config(args.config)
 
-    # 3. Get Data and Model
-    if 'yolo' in args.model.lower():
-        abs_exp_dir = os.path.abspath(exp_dir)
-        if args.resume:
-            print(f"🔄 Resuming from: {last_ckpt}")
-            import ultralytics.nn.tasks
-            from src.models.common.cord_att import CoordAtt
-            ultralytics.nn.tasks.CoordAtt = CoordAtt
-            model = YOLO(last_ckpt)
-            model.train(
-                project = os.path.dirname(abs_exp_dir),
-                name = os.path.basename(abs_exp_dir),
-                exist_ok = True,
-                plots = True,
-                save = True,
-                resume = True
-            )
-        else:
-            print(f"🚀 Training started. Results will be saved to: {exp_dir}")
-            data_cfg = get_dataloader(args.model, args.data)
-            model = get_model(args.model, weights=args.weights)
-            model.train(
-                data = data_cfg,
-                batch = args.batch,
-                epochs = args.epochs,
-                optimizer = 'AdamW',
-                weight_decay = 0.001,
-                lr0 = 0.001,
-                lrf = 0.01,
-                cos_lr = True,
-                dfl = 2.0,
-                box = 10.0,
-                cls = 1.5,
-                patience = 20,
-                # Augmentation
-                augmentations = get_train_transform(),
-                # Output
-                project = os.path.dirname(abs_exp_dir),
-                name = os.path.basename(abs_exp_dir),
-                exist_ok = True,
-                plots = True,
-                save = True,
-                resume = False,
-            )
-    else:
-        # Custom PyTorch loop (Faster R-CNN/FCOS)
-        pass
+    if args.epochs is not None:
+        config._data["epochs"] = args.epochs
+    if args.batch is not None:
+        config._data["batch_size"] = args.batch
+
+    exp_dir = setup_experiment(args.model)
+    logger = get_logger(exp_dir, name="train")
+
+    logger.info(f"Starting training: {args.model}")
+    logger.info(f"Experiment directory: {exp_dir}")
+
+    trainer = get_trainer(
+        model_name=args.model,
+        data_root=args.data,
+        exp_dir=exp_dir,
+        config=config.to_dict(),
+        weights=args.weights,
+        resume=args.resume,
+    )
+
+    results = trainer.train()
+
+    logger.info(f"Training complete!")
+    logger.info(f"Results: {results}")
+
+    print(f"\nTraining complete. Results saved to: {exp_dir}")
+
 
 if __name__ == "__main__":
     train()
