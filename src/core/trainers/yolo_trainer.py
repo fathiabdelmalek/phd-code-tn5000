@@ -1,11 +1,9 @@
 import os
-from pathlib import Path
-from typing import Dict, List, Optional, Any
-import torch
+from typing import Dict, Optional, Any
 
 from ..base_trainer import BaseTrainer
-from ...models.registery import get_model
 from ...datasets.factory import get_dataloader
+from ...utils.transforms import get_train_transform
 
 
 class YOLOTrainer(BaseTrainer):
@@ -93,7 +91,7 @@ class YOLOTrainer(BaseTrainer):
         else:
             train_kwargs.update(
                 {
-                    "optimizer": self.config.get("optimizer", "AdamW"),
+                    "optimizer": self.config.get("optimizer", "SGD"),
                     "lr0": self.config.get("lr0", 0.001),
                     "lrf": self.config.get("lrf", 0.01),
                     "weight_decay": self.config.get("weight_decay", 0.001),
@@ -102,6 +100,8 @@ class YOLOTrainer(BaseTrainer):
                     "box": self.config.get("box", 10.0),
                     "cls": self.config.get("cls", 1.5),
                     "dfl": self.config.get("dfl", 2.0),
+                    "augmentations": get_train_transform(model="yolo"),
+                    "augment": True,
                 }
             )
             results = self.model.train(**train_kwargs)

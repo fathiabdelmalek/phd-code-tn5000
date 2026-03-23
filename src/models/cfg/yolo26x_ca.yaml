@@ -1,8 +1,8 @@
-# YOLO26n with Coordinate Attention (CA)
-# Based on official YOLO11n architecture
+# YOLO26x with Coordinate Attention (CA)
+# Based on official YOLO11x architecture
 nc: 2  # Your number of classes (Benign, Malignant)
 scales:
-  n: [0.50, 0.25, 1024]
+  x: [1.00, 1.25, 1024]
 
 backbone:
   - [-1, 1, Conv, [64, 3, 2]]                     # 0-P1/2
@@ -15,7 +15,7 @@ backbone:
   - [-1, 1, Conv, [1024, 3, 2]]                   # 7-P5/32
   - [-1, 2, C3k2, [1024, True]]                   # 8
   - [-1, 1, SPPF, [1024, 5]]                      # 9
-  - [-1, 1, CoordAtt, [256]]                      # 10 - CoordAtt replaces C2PSA
+  - [-1, 1, CoordAtt, [1280]]                     # 10 - CoordAtt replaces C2PSA (1280 = 1024 * 1.25)
 
 head:
   - [-1, 1, nn.Upsample, [None, 2, 'nearest']]    # 11

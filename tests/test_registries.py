@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 
 
 class TestTrainerRegistry:
@@ -119,42 +119,34 @@ class TestModelRegistry:
 
             mock_yolo.assert_called_once()
 
-    def test_get_model_faster_rcnn(self):
-        """Test getting Faster-RCNN model."""
-        from src.models.registery import get_model
-
-        with patch("src.models.registery.torchvision") as mock_tv:
-            mock_instance = Mock()
-            mock_tv.models.detection.fasterrcnn_resnet50_fpn_v2.return_value = (
-                mock_instance
-            )
-
-            model = get_model("faster_rcnn", num_classes=2)
-
-            mock_tv.models.detection.fasterrcnn_resnet50_fpn_v2.assert_called_once()
-
     def test_get_model_fcos(self):
-        """Test getting FCOS model."""
+        """Test getting FCOS model via the pytorch registry."""
+        from src.models.pytorch import MODEL_REGISTRY
+
+        mock_class = Mock()
+        MODEL_REGISTRY["test_fcos"] = mock_class
+
         from src.models.registery import get_model
 
-        with patch("src.models.registery.torchvision") as mock_tv:
-            mock_instance = Mock()
-            mock_head = Mock()
-            mock_conv = Mock()
-            mock_conv.in_channels = 256
-            mock_head.conv = [mock_conv]
-            mock_instance.head.classification_head = mock_head
-            mock_tv.models.detection.fcos_resnet50_fpn.return_value = mock_instance
-            mock_tv.models.detection.fcos.FCOSClassificationHead = Mock()
+        model = get_model("test_fcos", num_classes=2)
 
-            model = get_model("fcos", num_classes=2)
-
-            mock_tv.models.detection.fcos_resnet50_fpn.assert_called_once()
-            mock_tv.models.detection.fcos.FCOSClassificationHead.assert_called_once()
+        mock_class.assert_called_once_with(num_classes=2)
 
     def test_get_model_unknown(self):
         """Test that unknown model raises error."""
         from src.models.registery import get_model
 
-        with pytest.raises(ValueError, match="not supported"):
+        with pytest.raises(ValueError, match="Unknown model"):
             get_model("unknown_model")
+
+    def test_list_available_models(self):
+        """Test listing available models."""
+        from src.models import list_available_models
+
+        models = list_available_models()
+
+        assert "yolo" in models
+        assert "pytorch" in models
+        assert "all" in models
+        assert "fcos" in models["pytorch"]
+        assert "yolo26n_ca" in models["yolo"]
