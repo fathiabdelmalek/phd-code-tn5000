@@ -45,21 +45,19 @@ class Config:
             self.data = str(BASE_DIR / data_path)
         else:
             self.data = data_path
-        self.batch_size = kwargs.get("batch_size", 8)
+        self.batch_size = kwargs.get("batch_size", 2)
         self.epochs = kwargs.get("epochs", 50)
         self.preset = kwargs.get("preset", "standard")
         self.device = kwargs.get("device", "cuda")
         self.img_size = kwargs.get("img_size", 640)
 
         # Load preset
-        preset = PRESETS.get(self.preset, PRESETS["standard"])
-        self.optimizer = kwargs.get("optimizer", preset["optimizer"])
-        self.lr = kwargs.get("lr", preset["lr"])
+        preset = PRESETS.get(self.preset, PRESETS.get("standard"))
+        self.optimizer = kwargs.get("optimizer", preset.get("optimizer"))
+        self.lr = kwargs.get("lr", preset.get("lr"))
         self.momentum = kwargs.get("momentum", preset.get("momentum", 0.937))
-        self.weight_decay = kwargs.get(
-            "weight_decay", preset.get("weight_decay", 0.0005)
-        )
-        self.warmup_epochs = kwargs.get("warmup_epochs", preset.get("warmup_epochs", 3))
+        self.weight_decay = kwargs.get("weight_decay", preset.get("weight_decay"))
+        self.warmup_epochs = kwargs.get("warmup_epochs", preset.get("warmup_epochs"))
         self.augmentations = kwargs.get("augmentations", preset.get("augmentations"))
 
     def __repr__(self):

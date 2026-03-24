@@ -3,12 +3,14 @@ Trainers - Simple, self-contained training classes.
 """
 
 import csv
-import json
 import shutil
+import time
 import numpy as np
 import torch
+import cv2
 from tqdm import tqdm
 from pathlib import Path
+from PIL import Image
 
 
 class YOLOTrainer:
@@ -560,3 +562,315 @@ class PyTorchTrainer:
             "best_epoch": best_epoch,
             "train_dir": str(self.train_dir),
         }
+
+
+class PyTorchEvaluator:
+    """Simple PyTorch model evaluator for FCOS, Faster-RCNN, etc."""
+
+    COCO_TO_TN5000 = {1: 0, 3: 1}
+
+    def __init__(self, model, config):
+        self.model = model
+        self.config = config
+        self.device = config.device if hasattr(config, "device") else "cuda"
+        self.exp_dir = getattr(config, "exp_dir", Path("experiments/default"))
+        self.val_dir = self.exp_dir / "val"
+        self.metrics_calculator = MetricsCalculator(iou_threshold=0.5)
+
+    def _remap_predictions(self, predictions):
+        """Remap COCO labels back to TN5000 labels."""
+        TN5000_TO_COCO_REVERSE = {v: k for k, v in self.COCO_TO_TN5000.items()}
+        remapped = []
+        for pred in predictions:
+            if isinstance(pred, dict) and "labels" in pred:
+                new_pred = pred.copy()
+                labels = new_pred["labels"]
+                if isinstance(labels, torch.Tensor):
+                    labels = labels.clone()
+                    for coco_label, tn_lbl in TN5000_TO_COCO_REVERSE.items():
+                        labels[labels == coco_label] = tn_lbl
+                    new_pred["labels"] = labels
+                remapped.append(new_pred)
+            else:
+                remapped.append(pred)
+        return remapped
+
+    def _get_backbone(self):
+        """Get backbone from model for Grad-CAM."""
+        if hasattr(self.model, "model") and hasattr(self.model.model, "backbone"):
+            return self.model.model.backbone
+        return None
+
+    def _generate_heatmaps(self, dataset, data_root):
+        """Generate Grad-CAM heatmaps."""
+        import albumentations as A
+        from albumentations.pytorch import ToTensorV2
+
+        heatmaps_dir = self.val_dir / "heatmaps"
+        heatmaps_dir.mkdir(parents=True, exist_ok=True)
+
+        backbone = self._get_backbone()
+        if backbone is None:
+            print("⚠ Warning: Could not find backbone, skipping heatmaps")
+            return
+
+        target_layer = None
+        for _, module in reversed(list(backbone.named_modules())):
+            if isinstance(module, torch.nn.Conv2d):
+                target_layer = module
+                break
+
+        if target_layer is None:
+            print("⚠ Warning: Could not find target layer, skipping heatmaps")
+            return
+
+        activations, gradients = None, None
+
+        def forward_hook(module, input, output):
+            nonlocal activations
+            activations = output
+
+        def backward_hook(module, grad_input, grad_output):
+            nonlocal gradients
+            gradients = grad_output[0]
+
+        handle1 = target_layer.register_forward_hook(forward_hook)
+        handle2 = target_layer.register_full_backward_hook(backward_hook)
+
+        val_transform = A.Compose([ToTensorV2()])
+
+        print(f"\nGenerating {len(dataset)} Grad-CAM heatmaps...")
+
+        try:
+            for idx in tqdm(range(len(dataset))):
+                img_id = dataset.image_ids[idx]
+                img_path = data_root / "JPEGImages" / f"{img_id}.jpg"
+
+                if not img_path.exists():
+                    continue
+
+                img = cv2.imread(str(img_path))
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                orig_h, orig_w = img.shape[:2]
+
+                transformed = val_transform(image=img_rgb)
+                img_tensor = (
+                    transformed["image"].unsqueeze(0).to(self.device).float() / 255.0
+                )
+
+                self.model.zero_grad()
+                self.model([img_tensor[0]])
+
+                if activations is not None and gradients is not None:
+                    pooled_grad = gradients.mean(dim=(2, 3), keepdim=True)
+                    cam = (pooled_grad * activations).sum(dim=1).squeeze()
+                    cam = torch.nn.functional.relu(cam).cpu().detach().numpy()
+                    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+
+                    heatmap = cv2.resize(cam, (orig_w, orig_h))
+                    heatmap = (heatmap * 255).astype(np.uint8)
+                    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+                    blended = (img_rgb * 0.5 + heatmap * 0.5).astype(np.uint8)
+
+                    cv2.imwrite(
+                        str(heatmaps_dir / f"{img_id}.jpg"),
+                        cv2.cvtColor(blended, cv2.COLOR_RGB2BGR),
+                    )
+        finally:
+            handle1.remove()
+            handle2.remove()
+
+        print(f"✓ Saved Grad-CAM heatmaps to {heatmaps_dir}")
+
+    def _generate_comparison_images(self, dataset, data_root, class_names):
+        """Generate GT vs Pred comparison images."""
+        from data.voc_loader import collate_fn
+        from torch.utils.data import DataLoader
+
+        boxes_dir = self.val_dir / "boxes"
+        boxes_dir.mkdir(parents=True, exist_ok=True)
+
+        colors = {0: (255, 0, 0), 1: (0, 0, 255)}
+
+        test_loader = DataLoader(
+            dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=2,
+            collate_fn=collate_fn,
+            pin_memory=True,
+        )
+
+        all_predictions = []
+        all_targets = []
+
+        for idx, (images, targets) in enumerate(tqdm(test_loader, desc="Evaluating")):
+            images = [img.to(self.device) for img in images]
+            targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
+
+            gt_boxes = targets[0]["boxes"].cpu()
+            gt_labels = targets[0]["labels"].cpu()
+
+            with torch.no_grad():
+                predictions = self.model(images)
+
+            if len(predictions) > 0:
+                pred = predictions[0]
+                pred = self._remap_predictions([pred])[0]
+
+                all_predictions.append(pred)
+                all_targets.append(targets[0])
+
+                img_id = dataset.image_ids[idx]
+                img_path = data_root / "JPEGImages" / f"{img_id}.jpg"
+
+                if img_path.exists():
+                    img = cv2.imread(str(img_path))
+                    h, w = img.shape[:2]
+
+                    img_gt = img.copy()
+                    for i, box in enumerate(gt_boxes):
+                        x1, y1, x2, y2 = box.int().tolist()
+                        cls = gt_labels[i].item()
+                        color = colors.get(cls, (0, 255, 0))
+                        cv2.rectangle(img_gt, (x1, y1), (x2, y2), color, 2)
+                        label = class_names[cls]
+                        cv2.putText(
+                            img_gt,
+                            label,
+                            (x1, max(y1 - 5, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            color,
+                            2,
+                        )
+
+                    img_pred = img.copy()
+                    pred_boxes = pred.get("boxes", torch.tensor([]))
+                    pred_labels = pred.get("labels", torch.tensor([]))
+                    pred_scores = pred.get("scores", torch.ones(len(pred_boxes)))
+
+                    for i, box in enumerate(pred_boxes):
+                        x1, y1, x2, y2 = box.int().tolist()
+                        cls = int(pred_labels[i].item())
+                        conf = float(pred_scores[i].item())
+                        color = colors.get(cls, (0, 255, 0))
+                        cv2.rectangle(img_pred, (x1, y1), (x2, y2), color, 2)
+                        label = f"{class_names[cls]} {conf:.2f}"
+                        cv2.putText(
+                            img_pred,
+                            label,
+                            (x1, max(y1 - 5, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            color,
+                            2,
+                        )
+
+                    canvas = np.zeros((h + 50, w * 2, 3), dtype=np.uint8)
+                    canvas[50:, :w] = img_gt
+                    canvas[50:, w:] = img_pred
+
+                    cv2.putText(
+                        canvas,
+                        "GT",
+                        (w // 2 - 20, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (255, 255, 255),
+                        2,
+                    )
+                    cv2.putText(
+                        canvas,
+                        "PRED",
+                        (w + w // 2 - 30, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (255, 255, 255),
+                        2,
+                    )
+
+                    cv2.imwrite(str(boxes_dir / f"{img_id}.jpg"), canvas)
+
+        return all_predictions, all_targets
+
+    def _save_results_json(self, metrics):
+        """Save results to JSON."""
+        results = {
+            "overall": {
+                "mAP50": float(metrics.get("mAP50", 0)),
+                "mAP50_95": float(metrics.get("mAP", 0)),
+                "precision": float(metrics.get("precision", 0)),
+                "recall": float(metrics.get("recall", 0)),
+                "f1": float(metrics.get("f1", 0)),
+            },
+            "per_class": {},
+        }
+
+        class_names = ["benign", "malignant"]
+        for i, name in enumerate(class_names):
+            results["per_class"][name] = {
+                "AP50": float(metrics.get("mAP50", 0)),
+                "AP50_95": float(metrics.get("mAP", 0)),
+                "precision": float(metrics.get("precision", 0)),
+                "recall": float(metrics.get("recall", 0)),
+                "f1": float(metrics.get("f1", 0)),
+            }
+
+        import json
+
+        results_path = self.val_dir / "results.json"
+        with open(results_path, "w") as f:
+            json.dump(results, f, indent=2)
+
+        print(f"✓ Saved results to {results_path}")
+
+    def evaluate(self):
+        """Evaluate PyTorch model on test set."""
+        from data.voc_loader import VOCDataset
+        from torch.utils.data import DataLoader
+
+        base_dir = Path(__file__).parent.parent.resolve()
+        data_root = base_dir / "data" / "voc"
+
+        self.val_dir.mkdir(parents=True, exist_ok=True)
+        (self.val_dir / "boxes").mkdir(exist_ok=True)
+        (self.val_dir / "heatmaps").mkdir(exist_ok=True)
+        (self.val_dir / "plots").mkdir(exist_ok=True)
+
+        class_names = ["benign", "malignant"]
+
+        test_dataset = VOCDataset(
+            root=str(data_root),
+            split="val",
+            numeric_classes=True,
+        )
+
+        print(f"Evaluating PyTorch model on {len(test_dataset)} images...")
+        self.model.eval()
+
+        predictions, targets = self._generate_comparison_images(
+            test_dataset, data_root, class_names
+        )
+
+        self.metrics_calculator.reset()
+        for pred, target in zip(predictions, targets):
+            self.metrics_calculator.evaluate_batch([pred], [target])
+        metrics = self.metrics_calculator.compute_metrics()
+
+        self._save_results_json(metrics)
+        self._generate_heatmaps(test_dataset, data_root)
+
+        print("\n" + "=" * 60)
+        print("EVALUATION RESULTS")
+        print("=" * 60)
+        print(f"mAP@50:      {metrics['mAP50']:.4f}")
+        print(f"mAP@50-95:   {metrics['mAP']:.4f}")
+        print(f"Precision:    {metrics['precision']:.4f}")
+        print(f"Recall:      {metrics['recall']:.4f}")
+        print(f"F1 Score:    {metrics['f1']:.4f}")
+        print("=" * 60)
+        print(f"\nResults saved to: {self.val_dir}")
+
+        return metrics

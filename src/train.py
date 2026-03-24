@@ -37,19 +37,18 @@ from trainers import YOLOTrainer, PyTorchTrainer
 
 
 def get_experiment_dir(model_name, scale=None):
-    """Create organized experiment directory with timestamp."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    """Create organized experiment directory."""
 
     if scale:
-        exp_name = f"{model_name}_{scale}_{timestamp}"
+        exp_name = f"{model_name}_{scale}"
     else:
-        exp_name = f"{model_name}_{timestamp}"
+        exp_name = f"{model_name}"
 
     exp_dir = Path("experiments") / exp_name
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     # Create train and val subdirectories
-    train_dir = exp_dir / "train"
+    train_dir = exp_dir / "val"
     val_dir = exp_dir / "val"
 
     train_dir.mkdir(exist_ok=True)
