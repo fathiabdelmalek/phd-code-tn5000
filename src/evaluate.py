@@ -764,7 +764,7 @@ def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
 
             image = Image.open(img_path).convert("RGB")
             transformed = val_transform(image=img_rgb)
-            img_tensor = transformed["image"].unsqueeze(0).to(device)
+            img_tensor = transformed["image"].unsqueeze(0).to(device).float() / 255.0
 
             model.zero_grad()
             _ = model([img_tensor[0]])
