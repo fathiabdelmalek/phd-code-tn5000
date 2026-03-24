@@ -38,7 +38,6 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
-from torch.utils.data import DataLoader
 
 from models import get_model
 
@@ -523,7 +522,7 @@ def main():
         # Create test dataloader
         test_dataset = VOCDataset(
             root=str(data_root),
-            split="test",
+            split="val",
             numeric_classes=True,
         )
         test_loader = DataLoader(
@@ -748,8 +747,6 @@ def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
 
     handle1 = target_layer.register_forward_hook(forward_hook)
     handle2 = target_layer.register_full_backward_hook(backward_hook)
-
-    val_transform = get_val_transforms()
 
     print(f"\nGenerating {len(dataset)} Grad-CAM heatmaps...")
 
