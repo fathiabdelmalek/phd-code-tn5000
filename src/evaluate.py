@@ -36,7 +36,10 @@ import shutil
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from tqdm import tqdm
+import torchvision.transforms as T
+from torch.utils.data import DataLoader
 
 from models import get_model
 
@@ -497,7 +500,316 @@ def main():
         print("=" * 60)
         print(f"\nResults saved to: {exp_dir / 'val'}")
     else:
-        print("PyTorch model evaluation not fully implemented")
+        print("Evaluating PyTorch model (FCOS)...")
+        from models.fcos import FCOSWrapper, get_fcos_model
+        from data.voc_loader import get_voc_dataloader, VOCDataset, collate_fn
+        from torchvision.ops import nms, box_iou
+        from trainers import MetricsCalculator
+        import csv
+
+        # Load FCOS model
+        fcos = FCOSWrapper(num_classes=2, pretrained=False)
+
+        # Load weights
+        weights_path = args.weights or str(exp_dir / "val" / "weights" / "best.pt")
+        if Path(weights_path).exists():
+            print(f"Loading FCOS weights from {weights_path}")
+            fcos.load_state_dict(torch.load(weights_path, map_location=args.device))
+        fcos = fcos.to(args.device)
+        fcos.eval()
+
+        # COCO to TN5000 label mapping (for remapping predictions)
+        COCO_TO_TN5000 = {1: 0, 3: 1}  # person->benign, bird->malignant
+
+        # Data paths
+        base_dir = Path(__file__).parent.parent.resolve()
+        data_root = base_dir / "data" / "voc"
+
+        # Create test dataloader
+        test_dataset = VOCDataset(
+            root=str(data_root),
+            split="test",
+            numeric_classes=True,
+        )
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=2,
+            collate_fn=collate_fn,
+            pin_memory=True,
+        )
+
+        # Initialize metrics calculator
+        metrics_calc = MetricsCalculator(iou_threshold=0.5)
+
+        # Generate comparison images and collect metrics
+        boxes_dir = exp_dir / "val" / "boxes"
+        ensure_dir(boxes_dir)
+
+        colors = {0: (255, 0, 0), 1: (0, 0, 255)}  # Blue=benign, Red=malignant
+
+        print(f"\nEvaluating {len(test_loader)} test images...")
+
+        all_predictions = []
+        all_targets = []
+
+        for idx, (images, targets) in enumerate(tqdm(test_loader)):
+            images = [img.to(args.device) for img in images]
+            targets = [{k: v.to(args.device) for k, v in t.items()} for t in targets]
+
+            # Get ground truth
+            gt_boxes = targets[0]["boxes"].cpu()
+            gt_labels = targets[0]["labels"].cpu()
+
+            # Run inference
+            with torch.no_grad():
+                predictions = fcos(images)
+
+            if len(predictions) > 0:
+                pred = predictions[0]
+
+                # Remap COCO labels to TN5000 labels
+                if "labels" in pred and len(pred["labels"]) > 0:
+                    coco_labels = pred["labels"]
+                    tn5000_labels = torch.zeros_like(coco_labels)
+                    for coco_lbl, tn_lbl in COCO_TO_TN5000.items():
+                        tn5000_labels[coco_labels == coco_lbl] = tn_lbl
+                    pred["labels"] = tn5000_labels
+
+                # Store for metrics
+                all_predictions.append(pred)
+                all_targets.append(targets[0])
+
+                # Generate comparison image
+                img_id = test_dataset.image_ids[idx]
+                img_path = data_root / "JPEGImages" / f"{img_id}.jpg"
+
+                if img_path.exists():
+                    img = cv2.imread(str(img_path))
+                    h, w = img.shape[:2]
+
+                    # Draw GT boxes
+                    img_gt = img.copy()
+                    for i, box in enumerate(gt_boxes):
+                        x1, y1, x2, y2 = box.int().tolist()
+                        cls = gt_labels[i].item()
+                        color = colors.get(cls, (0, 255, 0))
+                        cv2.rectangle(img_gt, (x1, y1), (x2, y2), color, 2)
+                        label = class_names[cls]
+                        cv2.putText(
+                            img_gt,
+                            label,
+                            (x1, max(y1 - 5, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            color,
+                            2,
+                        )
+
+                    # Draw predictions
+                    img_pred = img.copy()
+                    pred_boxes = pred.get("boxes", torch.tensor([]))
+                    pred_labels = pred.get("labels", torch.tensor([]))
+                    pred_scores = pred.get("scores", torch.ones(len(pred_boxes)))
+
+                    for i, box in enumerate(pred_boxes):
+                        x1, y1, x2, y2 = box.int().tolist()
+                        cls = (
+                            int(pred_labels[i].item())
+                            if isinstance(pred_labels[i], torch.Tensor)
+                            else int(pred_labels[i])
+                        )
+                        conf = (
+                            float(pred_scores[i].item())
+                            if isinstance(pred_scores[i], torch.Tensor)
+                            else float(pred_scores[i])
+                        )
+                        color = colors.get(cls, (0, 255, 0))
+                        cv2.rectangle(img_pred, (x1, y1), (x2, y2), color, 2)
+                        label = f"{class_names[cls]} {conf:.2f}"
+                        cv2.putText(
+                            img_pred,
+                            label,
+                            (x1, max(y1 - 5, 20)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            color,
+                            2,
+                        )
+
+                    # Combine side by side
+                    canvas = np.zeros((h + 50, w * 2, 3), dtype=np.uint8)
+                    canvas[50:, :w] = img_gt
+                    canvas[50:, w:] = img_pred
+
+                    cv2.putText(
+                        canvas,
+                        "GT",
+                        (w // 2 - 20, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (255, 255, 255),
+                        2,
+                    )
+                    cv2.putText(
+                        canvas,
+                        "PRED",
+                        (w + w // 2 - 30, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (255, 255, 255),
+                        2,
+                    )
+
+                    cv2.imwrite(str(boxes_dir / f"{img_id}.jpg"), canvas)
+
+        # Compute metrics
+        metrics_calc.reset()
+        for pred, target in zip(all_predictions, all_targets):
+            metrics_calc.evaluate_batch([pred], [target])
+        results = metrics_calc.compute_metrics()
+
+        # Save results.json
+        save_results_json(
+            type(
+                "Results",
+                (),
+                {
+                    "box": type(
+                        "BoxMetrics",
+                        (),
+                        {
+                            "map50": results["mAP50"],
+                            "map": results["mAP"],
+                            "mp": results["precision"],
+                            "mr": results["recall"],
+                            "ap50": [results["mAP50"]] * 2,
+                            "ap": [results["mAP"]] * 2,
+                            "p": [results["precision"]] * 2,
+                            "r": [results["recall"]] * 2,
+                            "f1": [results["f1"]] * 2,
+                        },
+                    )()
+                },
+            )(),
+            exp_dir,
+        )
+
+        # Generate Grad-CAM heatmaps for FCOS
+        generate_fcos_heatmaps(fcos, test_dataset, data_root, exp_dir, args.device)
+
+        # Print results
+        print("\n" + "=" * 60)
+        print("FCOS EVALUATION RESULTS")
+        print("=" * 60)
+        print(f"mAP@50:      {results['mAP50']:.4f}")
+        print(f"mAP@50-95:   {results['mAP']:.4f}")
+        print(f"Precision:    {results['precision']:.4f}")
+        print(f"Recall:      {results['recall']:.4f}")
+        print(f"F1 Score:    {results['f1']:.4f}")
+        print("=" * 60)
+        print(f"\nResults saved to: {exp_dir / 'val'}")
+
+
+def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
+    """Generate Grad-CAM heatmaps for FCOS model."""
+    from torchvision.models.detection import fcos
+
+    heatmaps_dir = exp_dir / "val" / "heatmaps"
+    ensure_dir(heatmaps_dir)
+
+    # Find backbone layers in FCOS
+    backbone = None
+    if hasattr(model, "model") and hasattr(model.model, "backbone"):
+        backbone = model.model.backbone
+
+    if backbone is None:
+        print("⚠ Warning: Could not find FCOS backbone, skipping heatmaps")
+        return
+
+    # Find last conv layer
+    target_layer = None
+    for name, module in reversed(list(backbone.named_modules())):
+        if isinstance(module, torch.nn.Conv2d):
+            target_layer = module
+            break
+
+    if target_layer is None:
+        print("⚠ Warning: Could not find target layer for Grad-CAM, skipping heatmaps")
+        return
+
+    activations = None
+    gradients = None
+
+    def forward_hook(module, input, output):
+        nonlocal activations
+        activations = output
+
+    def backward_hook(module, grad_input, grad_output):
+        nonlocal gradients
+        gradients = grad_output[0]
+
+    handle1 = target_layer.register_forward_hook(forward_hook)
+    handle2 = target_layer.register_full_backward_hook(backward_hook)
+
+    print(f"\nGenerating {len(dataset)} Grad-CAM heatmaps...")
+
+    try:
+        for idx in tqdm(range(len(dataset))):
+            img_id = dataset.image_ids[idx]
+            img_path = data_root / "JPEGImages" / f"{img_id}.jpg"
+
+            if not img_path.exists():
+                continue
+
+            img = cv2.imread(str(img_path))
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            orig_h, orig_w = img.shape[:2]
+
+            # Load and preprocess image
+            image = Image.open(img_path).convert("RGB")
+            img_tensor = T.ToTensor()(image).unsqueeze(0).to(device)
+
+            # Forward pass
+            model.zero_grad()
+            _ = model([img_tensor[0]])
+
+            # Generate Grad-CAM
+            if activations is not None and gradients is not None:
+                pooled_grad = gradients.mean(dim=(2, 3), keepdim=True)
+                cam = (pooled_grad * activations).sum(dim=1).squeeze()
+                cam = torch.nn.functional.relu(cam)
+                cam = cam.cpu().detach().numpy()
+                cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+
+                heatmap = cv2.resize(cam, (orig_w, orig_h))
+                heatmap = (heatmap * 255).astype(np.uint8)
+                heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+                blended = (img_rgb * 0.5 + heatmap * 0.5).astype(np.uint8)
+
+                cv2.imwrite(
+                    str(heatmaps_dir / f"{img_id}.jpg"),
+                    cv2.cvtColor(blended, cv2.COLOR_RGB2BGR),
+                )
+            else:
+                # Fallback: empty heatmap
+                blank = np.zeros((orig_h, orig_w), dtype=np.float32)
+                heatmap = cv2.resize(blank, (orig_w, orig_h))
+                heatmap = (heatmap * 255).astype(np.uint8)
+                heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+                blended = (img_rgb * 0.7 + heatmap * 0.3).astype(np.uint8)
+                cv2.imwrite(
+                    str(heatmaps_dir / f"{img_id}.jpg"),
+                    cv2.cvtColor(blended, cv2.COLOR_RGB2BGR),
+                )
+    finally:
+        handle1.remove()
+        handle2.remove()
+
+    print(f"✓ Saved Grad-CAM heatmaps to {heatmaps_dir}")
 
 
 if __name__ == "__main__":
