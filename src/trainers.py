@@ -154,8 +154,8 @@ class PyTorchTrainer:
                 total_loss += losses.item()
                 pbar.set_postfix({"loss": total_loss / (pbar.n + 1)})
 
-            # Validation
-            self.model.eval()
+            # Validation - FCOS returns detections in eval mode, so we use train mode
+            self.model.train()
             val_loss = 0
             with torch.no_grad():
                 for images, targets in val_loader:
@@ -166,9 +166,14 @@ class PyTorchTrainer:
                     targets = self._remap_labels(targets)
                     loss_dict = self.model(images, targets)
                     if isinstance(loss_dict, dict):
-                        val_loss += sum(loss for loss in loss_dict.values()).item()
-                    else:
-                        val_loss += sum(loss for loss in loss_dict).item()
+                        val_loss += sum(
+                            v.item() if hasattr(v, "item") else v
+                            for v in loss_dict.values()
+                        )
+                    elif isinstance(loss_dict, list):
+                        val_loss += sum(
+                            v.item() if hasattr(v, "item") else v for v in loss_dict
+                        )
 
             print(
                 f"Epoch {epoch}: train_loss={total_loss / len(train_loader):.4f}, val_loss={val_loss / len(val_loader):.4f}"
