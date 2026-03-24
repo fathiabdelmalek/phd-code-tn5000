@@ -403,20 +403,27 @@ def main():
     # Model config
     model_name = metadata.get("model", "yolo26")
     scale = metadata.get("scale", args.scale)
+    is_yolo = model_name == "yolo26"
 
     # Load model
-    if model_name == "yolo26":
+    if is_yolo:
         print(f"Loading YOLO26 scale={scale}")
         model = get_model("yolo26", num_classes=2, scale=scale)
     else:
         print(f"Loading {model_name.upper()}")
-        model = get_model(model_name, num_classes=2, pretrained=False)
+        from models.fcos import FCOSWrapper
+
+        model = FCOSWrapper(num_classes=2, pretrained=False)
+        model = model.to(args.device)
 
     # Load weights
     weights_path = args.weights or str(exp_dir / "val" / "weights" / "best.pt")
     if Path(weights_path).exists():
         print(f"Loading weights from {weights_path}")
-        model = model.load(weights_path)
+        if is_yolo:
+            model = model.load(weights_path)
+        else:
+            model.load_state_dict(torch.load(weights_path, map_location=args.device))
 
     # Ensure val directories exist
     ensure_dir(exp_dir / "val" / "boxes")
@@ -427,7 +434,7 @@ def main():
     print("Running YOLO validation on TEST set...")
     print("=" * 60 + "\n")
 
-    if "ultralytics" in type(model).__module__:
+    if is_yolo:
         # YOLO evaluation - save directly to val/ directory
         # Use absolute path to avoid runs/ folder
         val_dir = exp_dir / "val"
@@ -500,22 +507,11 @@ def main():
         print(f"\nResults saved to: {exp_dir / 'val'}")
     else:
         print("Evaluating PyTorch model (FCOS)...")
-        from models.fcos import FCOSWrapper, get_fcos_model
-        from data.voc_loader import get_voc_dataloader, VOCDataset, collate_fn
-        from torchvision.ops import nms, box_iou
+        from data.voc_loader import VOCDataset, collate_fn
         from trainers import MetricsCalculator
-        import csv
+        from torch.utils.data import DataLoader
 
-        # Load FCOS model
-        fcos = FCOSWrapper(num_classes=2, pretrained=False)
-
-        # Load weights
-        weights_path = args.weights or str(exp_dir / "val" / "weights" / "best.pt")
-        if Path(weights_path).exists():
-            print(f"Loading FCOS weights from {weights_path}")
-            fcos.load_state_dict(torch.load(weights_path, map_location=args.device))
-        fcos = fcos.to(args.device)
-        fcos.eval()
+        model.eval()
 
         # COCO to TN5000 label mapping (for remapping predictions)
         COCO_TO_TN5000 = {1: 0, 3: 1}  # person->benign, bird->malignant
@@ -563,7 +559,7 @@ def main():
 
             # Run inference
             with torch.no_grad():
-                predictions = fcos(images)
+                predictions = model(images)
 
             if len(predictions) > 0:
                 pred = predictions[0]
@@ -696,7 +692,7 @@ def main():
         )
 
         # Generate Grad-CAM heatmaps for FCOS
-        generate_fcos_heatmaps(fcos, test_dataset, data_root, exp_dir, args.device)
+        generate_fcos_heatmaps(model, test_dataset, data_root, exp_dir, args.device)
 
         # Print results
         print("\n" + "=" * 60)
