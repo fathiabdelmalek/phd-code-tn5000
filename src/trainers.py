@@ -443,7 +443,7 @@ class PyTorchTrainer:
         print(f"FCOS pretrained on COCO, remapping TN5000 labels to COCO labels")
         print(f"Saving to: {self.train_dir}")
 
-        best_map = 0
+        best_map = -1
         best_epoch = 0
 
         for epoch in range(self.config.epochs):
