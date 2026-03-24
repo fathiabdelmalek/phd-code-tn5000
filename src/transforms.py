@@ -1,3 +1,7 @@
+"""
+Data Augmentations using Albumentations.
+"""
+
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
@@ -18,7 +22,7 @@ _PIXEL_EXTENDED = [
 ]
 
 
-def get_train_transform(model: str = 'yolo') -> A.Compose:
+def get_train_transforms(model: str = 'yolo') -> A.Compose:
     """
     Returns training augmentation pipeline.
 
@@ -50,7 +54,7 @@ def get_train_transform(model: str = 'yolo') -> A.Compose:
     )
 
 
-def get_val_transform() -> A.Compose:
+def get_val_transforms() -> A.Compose:
     """
     Validation/test pipeline — no augmentation, just tensor conversion.
     Normalization should be applied separately if needed.
