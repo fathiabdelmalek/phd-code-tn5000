@@ -755,9 +755,14 @@ class PyTorchEvaluator:
                         x1, y1, x2, y2 = box.int().tolist()
                         cls = int(pred_labels[i].item())
                         conf = float(pred_scores[i].item())
+                        cls_name = (
+                            class_names[cls]
+                            if 0 <= cls < len(class_names)
+                            else str(cls)
+                        )
                         color = colors.get(cls, (0, 255, 0))
                         cv2.rectangle(img_pred, (x1, y1), (x2, y2), color, 2)
-                        label = f"{class_names[cls]} {conf:.2f}"
+                        label = f"{cls_name} {conf:.2f}"
                         cv2.putText(
                             img_pred,
                             label,
