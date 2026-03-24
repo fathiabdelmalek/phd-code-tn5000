@@ -308,13 +308,17 @@ class PyTorchTrainer:
         self.csv_path = self.train_dir / "results.csv"
         self.csv_columns = [
             "epoch",
-            "train_loss",
-            "val_loss",
-            "mAP",
-            "mAP50",
-            "precision",
-            "recall",
-            "f1",
+            "time",
+            "train/box_loss",
+            "train/cls_loss",
+            "train/dfl_loss",
+            "metrics/precision(B)",
+            "metrics/recall(B)",
+            "metrics/mAP50(B)",
+            "metrics/mAP50-95(B)",
+            "val/box_loss",
+            "val/cls_loss",
+            "val/dfl_loss",
         ]
 
         if not self.csv_path.exists():
@@ -322,25 +326,31 @@ class PyTorchTrainer:
                 writer = csv.DictWriter(f, fieldnames=self.csv_columns)
                 writer.writeheader()
 
-    def _log_epoch(self, epoch, metrics, train_loss, val_loss):
+    def _log_epoch(self, epoch, elapsed_time, train_loss, val_loss, metrics):
         """Log epoch metrics to CSV."""
         row = {
-            "epoch": epoch,
-            "train_loss": f"{train_loss:.4f}",
-            "val_loss": f"{val_loss:.4f}",
-            "mAP": f"{metrics.get('mAP', 0):.4f}",
-            "mAP50": f"{metrics.get('mAP50', 0):.4f}",
-            "precision": f"{metrics.get('precision', 0):.4f}",
-            "recall": f"{metrics.get('recall', 0):.4f}",
-            "f1": f"{metrics.get('f1', 0):.4f}",
+            "epoch": epoch + 1,
+            "time": f"{elapsed_time:.4f}",
+            "train/box_loss": f"{train_loss:.5f}",
+            "train/cls_loss": "0.00000",
+            "train/dfl_loss": "0.00000",
+            "metrics/precision(B)": f"{metrics.get('precision', 0):.5f}",
+            "metrics/recall(B)": f"{metrics.get('recall', 0):.5f}",
+            "metrics/mAP50(B)": f"{metrics.get('mAP50', 0):.5f}",
+            "metrics/mAP50-95(B)": f"{metrics.get('mAP', 0):.5f}",
+            "val/box_loss": f"{val_loss:.5f}",
+            "val/cls_loss": "0.00000",
+            "val/dfl_loss": "0.00000",
         }
         with open(self.csv_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=self.csv_columns)
             writer.writerow(row)
 
         print(
-            f"Epoch {epoch}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, "
-            f"mAP={row['mAP']}, P={row['precision']}, R={row['recall']}, F1={row['f1']}"
+            f"Epoch {epoch + 1}/{self.config.epochs}: box_loss={train_loss:.5f}, "
+            f"cls_loss=0.00000, dfl_loss=0.00000, mP={metrics.get('precision', 0):.4f}, "
+            f"mR={metrics.get('recall', 0):.4f}, mAP50={metrics.get('mAP50', 0):.4f}, "
+            f"mAP50-95={metrics.get('mAP', 0):.4f}"
         )
 
     def _save_weights(self, epoch, metrics, is_best):
@@ -361,45 +371,51 @@ class PyTorchTrainer:
             epochs = []
             train_losses = []
             val_losses = []
+            maps50 = []
             maps = []
             precisions = []
             recalls = []
-            f1s = []
 
             with open(self.csv_path, "r") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     epochs.append(int(row["epoch"]))
-                    train_losses.append(float(row["train_loss"]))
-                    val_losses.append(float(row["val_loss"]))
-                    maps.append(float(row["mAP"]))
-                    precisions.append(float(row["precision"]))
-                    recalls.append(float(row["recall"]))
-                    f1s.append(float(row["f1"]))
+                    train_losses.append(float(row["train/box_loss"]))
+                    val_losses.append(float(row["val/box_loss"]))
+                    maps50.append(float(row["metrics/mAP50(B)"]))
+                    maps.append(float(row["metrics/mAP50-95(B)"]))
+                    precisions.append(float(row["metrics/precision(B)"]))
+                    recalls.append(float(row["metrics/recall(B)"]))
 
-            fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+            fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
-            axes[0, 0].plot(epochs, train_losses, label="Train Loss")
-            axes[0, 0].plot(epochs, val_losses, label="Val Loss")
+            axes[0, 0].plot(epochs, train_losses, label="Train Loss", marker="o")
+            axes[0, 0].plot(epochs, val_losses, label="Val Loss", marker="o")
             axes[0, 0].set_xlabel("Epoch")
             axes[0, 0].set_ylabel("Loss")
-            axes[0, 0].set_title("Training/Validation Loss")
+            axes[0, 0].set_title("Box Loss")
             axes[0, 0].legend()
             axes[0, 0].grid(True)
 
-            axes[0, 1].plot(epochs, maps, label="mAP@50")
+            axes[0, 1].plot(epochs, maps50, label="mAP@50", marker="o")
             axes[0, 1].set_xlabel("Epoch")
-            axes[0, 1].set_ylabel("mAP")
-            axes[0, 1].set_title("Mean Average Precision")
+            axes[0, 1].set_ylabel("mAP@50")
+            axes[0, 1].set_title("mAP@50")
             axes[0, 1].legend()
             axes[0, 1].grid(True)
 
-            axes[1, 0].plot(epochs, precisions, label="Precision")
-            axes[1, 0].plot(epochs, recalls, label="Recall")
-            axes[1, 0].plot(epochs, f1s, label="F1")
+            axes[0, 2].plot(epochs, maps, label="mAP@50-95", marker="o")
+            axes[0, 2].set_xlabel("Epoch")
+            axes[0, 2].set_ylabel("mAP@50-95")
+            axes[0, 2].set_title("mAP@50-95")
+            axes[0, 2].legend()
+            axes[0, 2].grid(True)
+
+            axes[1, 0].plot(epochs, precisions, label="Precision", marker="o")
+            axes[1, 0].plot(epochs, recalls, label="Recall", marker="s")
             axes[1, 0].set_xlabel("Epoch")
             axes[1, 0].set_ylabel("Score")
-            axes[1, 0].set_title("Precision/Recall/F1")
+            axes[1, 0].set_title("Precision/Recall")
             axes[1, 0].legend()
             axes[1, 0].grid(True)
 
@@ -411,6 +427,14 @@ class PyTorchTrainer:
             axes[1, 1].legend()
             axes[1, 1].grid(True)
 
+            f1s = [2 * p * r / (p + r + 1e-8) for p, r in zip(precisions, recalls)]
+            axes[1, 2].plot(epochs, f1s, label="F1", marker="o", color="purple")
+            axes[1, 2].set_xlabel("Epoch")
+            axes[1, 2].set_ylabel("F1 Score")
+            axes[1, 2].set_title("F1 Score")
+            axes[1, 2].legend()
+            axes[1, 2].grid(True)
+
             plt.tight_layout()
             plt.savefig(self.train_dir / "results.png", dpi=150)
             plt.close()
@@ -421,6 +445,7 @@ class PyTorchTrainer:
 
     def train(self):
         """Train PyTorch model with VOC dataloader and comprehensive metrics."""
+        import time as time_module
         from data.voc_loader import create_tn5000_dataloaders
 
         base_dir = Path(__file__).parent.parent.resolve()
@@ -447,10 +472,11 @@ class PyTorchTrainer:
         best_epoch = 0
 
         for epoch in range(self.config.epochs):
+            epoch_start = time_module.time()
             self.model.train()
             total_loss = 0
 
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}")
             for images, targets in pbar:
                 images = [img.to(self.device) for img in images]
                 targets = [
@@ -504,8 +530,10 @@ class PyTorchTrainer:
             val_loss = val_loss / len(val_loader)
             metrics = self.metrics_calculator.compute_metrics()
 
+            elapsed_time = time_module.time() - epoch_start
+
             # Log and save
-            self._log_epoch(epoch, metrics, train_loss, val_loss)
+            self._log_epoch(epoch, elapsed_time, train_loss, val_loss, metrics)
 
             is_best = metrics.get("mAP", 0) > best_map
             if is_best:
