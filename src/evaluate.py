@@ -709,11 +709,13 @@ def main():
 
 def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
     """Generate Grad-CAM heatmaps for FCOS model."""
-    from torchvision.models.detection import fcos
-    from transforms import get_val_transforms
+    import albumentations as A
+    from albumentations.pytorch import ToTensorV2
 
     heatmaps_dir = exp_dir / "val" / "heatmaps"
     ensure_dir(heatmaps_dir)
+
+    val_transform = A.Compose([ToTensorV2()])
 
     backbone = None
     if hasattr(model, "model") and hasattr(model.model, "backbone"):
