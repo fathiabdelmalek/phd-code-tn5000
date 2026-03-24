@@ -38,7 +38,6 @@ import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
-import torchvision.transforms as T
 from torch.utils.data import DataLoader
 
 from models import get_model
@@ -715,11 +714,11 @@ def main():
 def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
     """Generate Grad-CAM heatmaps for FCOS model."""
     from torchvision.models.detection import fcos
+    from transforms import get_val_transforms
 
     heatmaps_dir = exp_dir / "val" / "heatmaps"
     ensure_dir(heatmaps_dir)
 
-    # Find backbone layers in FCOS
     backbone = None
     if hasattr(model, "model") and hasattr(model.model, "backbone"):
         backbone = model.model.backbone
@@ -728,7 +727,6 @@ def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
         print("⚠ Warning: Could not find FCOS backbone, skipping heatmaps")
         return
 
-    # Find last conv layer
     target_layer = None
     for name, module in reversed(list(backbone.named_modules())):
         if isinstance(module, torch.nn.Conv2d):
@@ -753,6 +751,8 @@ def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
     handle1 = target_layer.register_forward_hook(forward_hook)
     handle2 = target_layer.register_full_backward_hook(backward_hook)
 
+    val_transform = get_val_transforms()
+
     print(f"\nGenerating {len(dataset)} Grad-CAM heatmaps...")
 
     try:
@@ -767,15 +767,13 @@ def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             orig_h, orig_w = img.shape[:2]
 
-            # Load and preprocess image
             image = Image.open(img_path).convert("RGB")
-            img_tensor = T.ToTensor()(image).unsqueeze(0).to(device)
+            transformed = val_transform(image=img_rgb)
+            img_tensor = transformed["image"].unsqueeze(0).to(device)
 
-            # Forward pass
             model.zero_grad()
             _ = model([img_tensor[0]])
 
-            # Generate Grad-CAM
             if activations is not None and gradients is not None:
                 pooled_grad = gradients.mean(dim=(2, 3), keepdim=True)
                 cam = (pooled_grad * activations).sum(dim=1).squeeze()
@@ -794,7 +792,6 @@ def generate_fcos_heatmaps(model, dataset, data_root, exp_dir, device="cuda"):
                     cv2.cvtColor(blended, cv2.COLOR_RGB2BGR),
                 )
             else:
-                # Fallback: empty heatmap
                 blank = np.zeros((orig_h, orig_w), dtype=np.float32)
                 heatmap = cv2.resize(blank, (orig_w, orig_h))
                 heatmap = (heatmap * 255).astype(np.uint8)
