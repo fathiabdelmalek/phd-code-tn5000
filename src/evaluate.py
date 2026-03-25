@@ -178,9 +178,7 @@ class YOLOGradCAM:
                 if hasattr(self.model.model, "model")
                 else self.model.model
             )
-            for _, module in reversed(list(backbone.named_modules())):
-                if "Detect" in type(module).__name__:
-                    continue
+            for name, module in reversed(list(backbone.named_modules())):
                 if isinstance(module, torch.nn.Conv2d):
                     return module
         return None
@@ -203,20 +201,29 @@ class YOLOGradCAM:
             hook.remove()
 
     def generate(self, input_tensor, target_class=None):
-        if self.target_layer is None or self.activations is None:
+        if self.target_layer is None:
             return None
 
         self.model.zero_grad()
+        self.activations = None
+        self.gradients = None
+
+        input_tensor = input_tensor.to(next(self.model.model.parameters()).device)
+        input_tensor.requires_grad = True
 
         output = self.model(input_tensor)
-        if target_class is None:
-            target_class = (
-                output[0].boxes.conf.argmax().item() if len(output[0]) > 0 else 0
-            )
 
-        one_hot = torch.zeros_like(output[0].boxes.conf)
-        one_hot[0, target_class] = 1.0
-        output[0].boxes.conf.backward(gradient=one_hot, retain_graph=True)
+        if target_class is None and len(output[0].boxes) > 0:
+            target_class = int(output[0].boxes.cls[0])
+        elif target_class is None:
+            target_class = 0
+
+        cls_score = (
+            output[0].boxes.conf[0]
+            if len(output[0].boxes) > 0
+            else output[0].boxes.conf.mean()
+        )
+        cls_score.backward(retain_graph=True)
 
         if self.gradients is None or self.activations is None:
             return None
@@ -225,6 +232,10 @@ class YOLOGradCAM:
         weighted_activations = pooled_grad * self.activations
         cam = weighted_activations.sum(dim=1).squeeze()
         cam = torch.nn.functional.relu(cam).cpu().detach().numpy()
+
+        if cam.size == 1:
+            return None
+
         cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
 
         return cam
@@ -340,7 +351,7 @@ def save_results_json(metrics, exp_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a detection model")
-    parser.add_argument("--exp", type=str, required=True, help="Experiment directory")
+    parser.add_argument("exp", type=str, help="Experiment directory")
     parser.add_argument(
         "--scale", "-s", type=str, default="n", choices=["n", "s", "m", "l", "x"]
     )

@@ -14,19 +14,22 @@ PRESETS = {
         "momentum": 0.937,
         "weight_decay": 0.0005,
         "warmup_epochs": 1,
+        "patience": 5,
     },
     "standard": {
         "optimizer": "SGD",
-        "lr": 0.001,
+        "lr": 0.01,
         "momentum": 0.937,
         "weight_decay": 0.0005,
         "warmup_epochs": 3,
+        "patience": 10,
     },
     "adamw": {
         "optimizer": "AdamW",
-        "lr": 0.0001,
+        "lr": 0.001,
         "weight_decay": 0.01,
         "warmup_epochs": 3,
+        "patience": 10,
     },
     "fine_tune": {
         "optimizer": "SGD",
@@ -34,6 +37,7 @@ PRESETS = {
         "momentum": 0.9,
         "weight_decay": 0.0001,
         "warmup_epochs": 5,
+        "patience": 20,
     },
 }
 
@@ -59,6 +63,7 @@ class Config:
         self.weight_decay = kwargs.get("weight_decay", preset.get("weight_decay"))
         self.warmup_epochs = kwargs.get("warmup_epochs", preset.get("warmup_epochs"))
         self.augmentations = kwargs.get("augmentations", preset.get("augmentations"))
+        self.patience = kwargs.get("patience", preset.get("patience"))
 
     def __repr__(self):
         return (

@@ -46,7 +46,8 @@ class YOLOTrainer:
             momentum=self.config.momentum,
             weight_decay=self.config.weight_decay,
             warmup_epochs=self.config.warmup_epochs,
-            augment=True,
+            augmentations=self.config.augmentations,
+            patience=self.config.patience,
             exist_ok=True,
             plots=True,
             save=True,
@@ -641,6 +642,8 @@ class PyTorchEvaluator:
 
         print(f"\nGenerating {len(dataset)} Grad-CAM heatmaps...")
 
+        self.model.train()
+
         try:
             for idx in tqdm(range(len(dataset))):
                 img_id = dataset.image_ids[idx]
@@ -657,14 +660,28 @@ class PyTorchEvaluator:
                 img_tensor = (
                     transformed["image"].unsqueeze(0).to(self.device).float() / 255.0
                 )
+                img_tensor.requires_grad = True
+
+                dummy_targets = [
+                    {
+                        "boxes": torch.zeros((0, 4), device=self.device),
+                        "labels": torch.zeros(
+                            (0,), dtype=torch.long, device=self.device
+                        ),
+                    }
+                ]
 
                 self.model.zero_grad()
-                self.model([img_tensor[0]])
+                self.model([img_tensor[0]], dummy_targets)
 
                 if activations is not None and gradients is not None:
                     pooled_grad = gradients.mean(dim=(2, 3), keepdim=True)
                     cam = (pooled_grad * activations).sum(dim=1).squeeze()
                     cam = torch.nn.functional.relu(cam).cpu().detach().numpy()
+
+                    if cam.size == 1:
+                        cam = np.zeros((16, 16))
+
                     cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
 
                     heatmap = cv2.resize(cam, (orig_w, orig_h))
@@ -677,9 +694,22 @@ class PyTorchEvaluator:
                         str(heatmaps_dir / f"{img_id}.jpg"),
                         cv2.cvtColor(blended, cv2.COLOR_RGB2BGR),
                     )
+                else:
+                    blank = np.zeros((orig_h, orig_w), dtype=np.float32)
+                    heatmap = cv2.resize(blank, (orig_w, orig_h))
+                    heatmap = (heatmap * 255).astype(np.uint8)
+                    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+                    blended = (img_rgb * 0.7 + heatmap * 0.3).astype(np.uint8)
+                    cv2.imwrite(
+                        str(heatmaps_dir / f"{img_id}.jpg"),
+                        cv2.cvtColor(blended, cv2.COLOR_RGB2BGR),
+                    )
+
         finally:
             handle1.remove()
             handle2.remove()
+            self.model.eval()
 
         print(f"✓ Saved Grad-CAM heatmaps to {heatmaps_dir}")
 
