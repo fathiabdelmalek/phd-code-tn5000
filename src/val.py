@@ -19,8 +19,7 @@ Structure:
         └── results.json        # Detailed metrics
 
 Usage:
-    cd src
-    python evaluate.py --exp experiments/yolo26_n_20260324_120000
+    python -m src.val experiments/yolo26_n
 """
 
 import sys
@@ -161,11 +160,10 @@ def generate_comparison_images(
 
 
 class YOLOGradCAM:
-    """Grad-CAM implementation for YOLO models."""
+    """Simple Grad-CAM using activation maps (no backward pass needed)."""
 
     def __init__(self, model, target_layer=None):
         self.model = model
-        self.gradients = None
         self.activations = None
         self.target_layer = target_layer or self._find_target_layer()
         self.hooks = []
@@ -188,57 +186,35 @@ class YOLOGradCAM:
             return
 
         def forward_hook(module, input, output):
-            self.activations = output
-
-        def backward_hook(module, grad_input, grad_output):
-            self.gradients = grad_output[0]
+            self.activations = output.detach()
 
         self.hooks.append(self.target_layer.register_forward_hook(forward_hook))
-        self.hooks.append(self.target_layer.register_full_backward_hook(backward_hook))
 
     def remove_hooks(self):
         for hook in self.hooks:
             hook.remove()
 
-    def generate(self, input_tensor, target_class=None):
-        if self.target_layer is None:
+    def generate(self, input_tensor):
+        if self.target_layer is None or self.activations is None:
             return None
 
-        self.model.zero_grad()
-        self.activations = None
-        self.gradients = None
+        self.model(input_tensor)
 
-        input_tensor = input_tensor.to(next(self.model.model.parameters()).device)
-        input_tensor.requires_grad = True
+        feat = self.activations
+        if len(feat.shape) == 4:
+            heatmap = torch.mean(feat, dim=1).squeeze()
+        else:
+            heatmap = feat.squeeze()
 
-        output = self.model(input_tensor)
+        heatmap = torch.nn.functional.relu(heatmap)
+        heatmap = heatmap.cpu().detach().numpy()
 
-        if target_class is None and len(output[0].boxes) > 0:
-            target_class = int(output[0].boxes.cls[0])
-        elif target_class is None:
-            target_class = 0
-
-        cls_score = (
-            output[0].boxes.conf[0]
-            if len(output[0].boxes) > 0
-            else output[0].boxes.conf.mean()
-        )
-        cls_score.backward(retain_graph=True)
-
-        if self.gradients is None or self.activations is None:
+        if heatmap.size == 1:
             return None
 
-        pooled_grad = self.gradients.mean(dim=(2, 3), keepdim=True)
-        weighted_activations = pooled_grad * self.activations
-        cam = weighted_activations.sum(dim=1).squeeze()
-        cam = torch.nn.functional.relu(cam).cpu().detach().numpy()
+        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
 
-        if cam.size == 1:
-            return None
-
-        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-
-        return cam
+        return heatmap
 
 
 def generate_heatmaps(model, test_images_dir, exp_dir):
@@ -358,7 +334,9 @@ def main():
     parser.add_argument(
         "--weights", "-w", type=str, default=None, help="Path to weights file"
     )
-    parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
+    parser.add_argument(
+        "--conf", "-c", type=float, default=0.25, help="Confidence threshold"
+    )
     parser.add_argument("--device", "-d", type=str, default="cuda", help="Device")
     args = parser.parse_args()
 

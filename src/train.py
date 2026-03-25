@@ -8,7 +8,7 @@ Structure:
     ├── train/              # Training outputs
     │   ├── train_batch*.jpg
     │   └── labels.jpg
-    └── val/               # Validation outputs (after evaluate.py)
+    └── val/               # Validation outputs (after val.py)
         ├── boxes/
         ├── heatmaps/
         ├── plots/
@@ -16,9 +16,9 @@ Structure:
         └── weights/
 
 Usage:
-    cd src
-    python train.py yolo26 -s n -b 8 -e 50
-    python train.py yolo26 -s m -b 4 -e 100
+    python -m src.train yolo26 -s n -b 8 -e 50
+    python -m src.train yolo26 -s m -b 4 -e 200 -p adamw
+    python -m src.train fcos -b 2 -e 50
 """
 
 import sys
@@ -148,7 +148,7 @@ def main():
     print("Training complete!")
     print(f"Experiment: {exp_dir}")
     print("\nRun evaluation with:")
-    print(f"  python evaluate.py --exp {exp_dir}")
+    print(f"  python val.py {exp_dir}")
     print("=" * 60)
 
 

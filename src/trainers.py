@@ -603,7 +603,7 @@ class PyTorchEvaluator:
         return None
 
     def _generate_heatmaps(self, dataset, data_root):
-        """Generate Grad-CAM heatmaps."""
+        """Generate Grad-CAM heatmaps using activation maps."""
         import albumentations as A
         from albumentations.pytorch import ToTensorV2
 
@@ -625,24 +625,19 @@ class PyTorchEvaluator:
             print("⚠ Warning: Could not find target layer, skipping heatmaps")
             return
 
-        activations, gradients = None, None
+        activations = None
 
         def forward_hook(module, input, output):
             nonlocal activations
-            activations = output
+            activations = output.detach()
 
-        def backward_hook(module, grad_input, grad_output):
-            nonlocal gradients
-            gradients = grad_output[0]
-
-        handle1 = target_layer.register_forward_hook(forward_hook)
-        handle2 = target_layer.register_full_backward_hook(backward_hook)
+        handle = target_layer.register_forward_hook(forward_hook)
 
         val_transform = A.Compose([ToTensorV2()])
 
         print(f"\nGenerating {len(dataset)} Grad-CAM heatmaps...")
 
-        self.model.train()
+        self.model.eval()
 
         try:
             for idx in tqdm(range(len(dataset))):
@@ -660,31 +655,27 @@ class PyTorchEvaluator:
                 img_tensor = (
                     transformed["image"].unsqueeze(0).to(self.device).float() / 255.0
                 )
-                img_tensor.requires_grad = True
 
-                dummy_targets = [
-                    {
-                        "boxes": torch.zeros((0, 4), device=self.device),
-                        "labels": torch.zeros(
-                            (0,), dtype=torch.long, device=self.device
-                        ),
-                    }
-                ]
+                self.model([img_tensor[0]])
 
-                self.model.zero_grad()
-                self.model([img_tensor[0]], dummy_targets)
+                if activations is not None:
+                    feat = activations
+                    if len(feat.shape) == 4:
+                        heatmap = torch.mean(feat, dim=1).squeeze()
+                    else:
+                        heatmap = feat.squeeze()
 
-                if activations is not None and gradients is not None:
-                    pooled_grad = gradients.mean(dim=(2, 3), keepdim=True)
-                    cam = (pooled_grad * activations).sum(dim=1).squeeze()
-                    cam = torch.nn.functional.relu(cam).cpu().detach().numpy()
+                    heatmap = torch.nn.functional.relu(heatmap)
+                    heatmap = heatmap.cpu().detach().numpy()
 
-                    if cam.size == 1:
-                        cam = np.zeros((16, 16))
+                    if heatmap.size == 1:
+                        heatmap = np.zeros((16, 16))
 
-                    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+                    heatmap = (heatmap - heatmap.min()) / (
+                        heatmap.max() - heatmap.min() + 1e-8
+                    )
 
-                    heatmap = cv2.resize(cam, (orig_w, orig_h))
+                    heatmap = cv2.resize(heatmap, (orig_w, orig_h))
                     heatmap = (heatmap * 255).astype(np.uint8)
                     heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
                     heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
@@ -707,9 +698,7 @@ class PyTorchEvaluator:
                     )
 
         finally:
-            handle1.remove()
-            handle2.remove()
-            self.model.eval()
+            handle.remove()
 
         print(f"✓ Saved Grad-CAM heatmaps to {heatmaps_dir}")
 
