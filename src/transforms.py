@@ -22,16 +22,17 @@ _PIXEL_EXTENDED = [
 ]
 
 
-def get_train_transforms(model: str = 'yolo') -> A.Compose:
+def get_train_transforms(model: str = 'yolo', type: str = 'half') -> A.Compose:
     """
     Returns training augmentation pipeline.
 
     Args:
-        model: 'frcnn' | 'fcos' | 'yolo'
+        :param model: 'frcnn' | 'fcos' | 'yolo'
+        :param type: type of augmentation (none, half, full)
     """
     if model == 'yolo':
         return A.Compose(
-            _SPATIAL + _PIXEL,
+            _SPATIAL + _PIXEL if type == 'half' else _SPATIAL + _PIXEL + _PIXEL_EXTENDED,
             bbox_params=A.BboxParams(
                 format='yolo',
                 label_fields=['labels'],
@@ -43,7 +44,7 @@ def get_train_transforms(model: str = 'yolo') -> A.Compose:
 
     # Pascal VOC format (Faster R-CNN, SSD, etc.)
     return A.Compose(
-        _SPATIAL + _PIXEL + [ToTensorV2()],
+        _SPATIAL + _PIXEL + [ToTensorV2()] if type == 'half' else _SPATIAL + _PIXEL + _PIXEL_EXTENDED + [ToTensorV2()],
         bbox_params=A.BboxParams(
             format='pascal_voc',
             label_fields=['labels'],

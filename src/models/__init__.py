@@ -33,16 +33,21 @@ YOLO_SCALE_INFO = {
 
 
 def get_model(
-    name: str, num_classes: int = 2, pretrained: bool = True, scale: str = "n"
+    name: str,
+    num_classes: int = 2,
+    pretrained: bool = True,
+    scale: str = "n",
+    use_coord_att: bool = False,
 ):
     """
     Get model by name.
 
     Args:
-        name: Model name ('yolo26', 'fcos')
+        name: Model name ('yolo26', 'fcos', 'fcnn')
         num_classes: Number of classes
         pretrained: Use pretrained weights (YOLO only)
         scale: YOLO scale - 'n', 's', 'm', 'l', or 'x' (default: 'n')
+        use_coord_att: Use CoordAtt in FCOS (default: False)
 
     Returns:
         Model instance
@@ -52,7 +57,7 @@ def get_model(
     if name.startswith("yolo26"):
         return get_yolo_model(name="yolo26", num_classes=num_classes, scale=scale)
     elif name == "fcos":
-        return FCOSWrapper(num_classes, pretrained)
+        return FCOSWrapper(num_classes, pretrained, use_coord_att)
     else:
         raise ValueError(f"Unknown model: {name}. Available: ['yolo26', 'fcos']")
 

@@ -48,8 +48,6 @@ def get_yolo_model(name: str = "yolo26", num_classes: int = 2, scale: str = "n")
     cfg["scales"] = {scale: cfg["scales"][scale]}
 
     # Save temp config with scale in filename
-    import tempfile
-
     temp_path = f"temp_yolo26{scale}.yaml"
     with open(temp_path, "w") as f:
         yaml.dump(cfg, f)

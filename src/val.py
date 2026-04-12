@@ -37,7 +37,6 @@ import torch
 from tqdm import tqdm
 
 from models import get_model
-from trainers import YOLOTrainer, PyTorchEvaluator
 
 
 def ensure_dir(path):
@@ -176,9 +175,20 @@ class YOLOGradCAM:
                 if hasattr(self.model.model, "model")
                 else self.model.model
             )
-            for name, module in reversed(list(backbone.named_modules())):
-                if isinstance(module, torch.nn.Conv2d):
-                    return module
+
+            # Target layer 9's SPPF output (last backbone layer before head)
+            # Layer 9 is SPPF, its cv2.conv is the final output
+            if len(backbone) > 9:
+                layer_9 = backbone[9]
+                if hasattr(layer_9, "cv2") and hasattr(layer_9.cv2, "conv"):
+                    print(f"Using target layer: 9.cv2.conv")
+                    return layer_9.cv2.conv
+                # Fallback to any conv in layer 9
+                for name, conv in layer_9.named_modules():
+                    if isinstance(conv, torch.nn.Conv2d) and conv.out_channels >= 64:
+                        print(f"Using target layer: 9.{name}")
+                        return conv
+
         return None
 
     def _register_hooks(self):
@@ -195,12 +205,19 @@ class YOLOGradCAM:
             hook.remove()
 
     def generate(self, input_tensor):
-        if self.target_layer is None or self.activations is None:
+        if self.target_layer is None:
+            print("DEBUG: target_layer is None")
             return None
 
         self.model(input_tensor)
 
+        if self.activations is None:
+            print("DEBUG: activations still None after forward")
+            return None
+
         feat = self.activations
+        print(f"DEBUG: activations shape: {feat.shape}")
+
         if len(feat.shape) == 4:
             heatmap = torch.mean(feat, dim=1).squeeze()
         else:
@@ -208,6 +225,10 @@ class YOLOGradCAM:
 
         heatmap = torch.nn.functional.relu(heatmap)
         heatmap = heatmap.cpu().detach().numpy()
+
+        print(
+            f"DEBUG: heatmap shape: {heatmap.shape}, min: {heatmap.min():.4f}, max: {heatmap.max():.4f}"
+        )
 
         if heatmap.size == 1:
             return None
@@ -269,7 +290,14 @@ def generate_heatmaps(model, test_images_dir, exp_dir):
                     str(heatmaps_dir / img_path.name),
                     cv2.cvtColor(blended, cv2.COLOR_RGB2BGR),
                 )
-        except Exception:
+            else:
+                # Debug: save original image as fallback
+                cv2.imwrite(
+                    str(heatmaps_dir / img_path.name),
+                    cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR),
+                )
+        except Exception as e:
+            print(f"Error on {img_path.name}: {e}")
             continue
 
     gradcam.remove_hooks()
@@ -363,7 +391,7 @@ def main():
 
     model_name = metadata.get("model", "yolo26")
     scale = metadata.get("scale", args.scale)
-    is_yolo = model_name == "yolo26"
+    is_yolo = "yolo26" in model_name
 
     if is_yolo:
         print(f"Loading YOLO26 scale={scale}")
@@ -375,7 +403,7 @@ def main():
         model = FCOSWrapper(num_classes=2, pretrained=False)
         model = model.to(args.device)
 
-    weights_path = args.weights or str(exp_dir / "val" / "weights" / "best.pt")
+    weights_path = args.weights or str(exp_dir / "train" / "weights" / "best.pt")
     if Path(weights_path).exists():
         print(f"Loading weights from {weights_path}")
         if is_yolo:
@@ -455,7 +483,7 @@ def main():
         print(f"\nResults saved to: {exp_dir / 'val'}")
 
     else:
-        from trainers import PyTorchEvaluator
+        from src.trainer import PyTorchEvaluator
 
         config = type(
             "Config",

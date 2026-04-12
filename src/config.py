@@ -39,6 +39,14 @@ PRESETS = {
         "warmup_epochs": 5,
         "patience": 20,
     },
+    "fcos": {
+        "optimizer": "SGD",
+        "lr": 0.0001,
+        "momentum": 0.9,
+        "weight_decay": 0.0001,
+        "warmup_epochs": 1,
+        "patience": 10,
+    },
 }
 
 
@@ -49,9 +57,9 @@ class Config:
             self.data = str(BASE_DIR / data_path)
         else:
             self.data = data_path
+        self.preset = kwargs.get("preset", "standard")
         self.batch_size = kwargs.get("batch_size", 2)
         self.epochs = kwargs.get("epochs", 50)
-        self.preset = kwargs.get("preset", "standard")
         self.device = kwargs.get("device", "cuda")
         self.img_size = kwargs.get("img_size", 640)
 

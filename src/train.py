@@ -33,14 +33,14 @@ from datetime import datetime
 
 from config import Config
 from models import get_model, YOLO_SCALES, YOLO_SCALE_INFO
-from trainers import YOLOTrainer, PyTorchTrainer
+from src.trainer import YOLOTrainer, PyTorchTrainer
 
 
 def get_experiment_dir(model_name, scale=None):
     """Create organized experiment directory."""
 
     if scale:
-        exp_name = f"{model_name}_{scale}"
+        exp_name = f"{model_name}{scale}"
     else:
         exp_name = f"{model_name}"
 
@@ -48,7 +48,7 @@ def get_experiment_dir(model_name, scale=None):
     exp_dir.mkdir(parents=True, exist_ok=True)
 
     # Create train and val subdirectories
-    train_dir = exp_dir / "val"
+    train_dir = exp_dir / "train"
     val_dir = exp_dir / "val"
 
     train_dir.mkdir(exist_ok=True)
@@ -58,7 +58,6 @@ def get_experiment_dir(model_name, scale=None):
     (val_dir / "boxes").mkdir(exist_ok=True)
     (val_dir / "heatmaps").mkdir(exist_ok=True)
     (val_dir / "plots").mkdir(exist_ok=True)
-    (val_dir / "weights").mkdir(exist_ok=True)
 
     return exp_dir
 
@@ -66,7 +65,7 @@ def get_experiment_dir(model_name, scale=None):
 def main():
     parser = argparse.ArgumentParser(description="Train a detection model")
     parser.add_argument(
-        "model", type=str, choices=["yolo26", "fcos"], help="Model name"
+        "model", type=str, choices=["yolo26", "fcos", "fcnn"], help="Model name"
     )
     parser.add_argument(
         "--scale",
@@ -76,19 +75,27 @@ def main():
         choices=YOLO_SCALES,
         help=f"YOLO scale (default: n)",
     )
-    parser.add_argument("--batch", "-b", type=int, default=8, help="Batch size")
-    parser.add_argument("--epochs", "-e", type=int, default=50, help="Number of epochs")
     parser.add_argument(
         "--preset",
         "-p",
         type=str,
         default="standard",
-        choices=["fast", "standard", "adamw", "fine_tune"],
+        choices=["fast", "standard", "adamw", "fine_tune", "fcos"],
         help="Hyperparameter preset",
     )
+    parser.add_argument("--batch", "-b", type=int, default=2, help="Batch size")
+    parser.add_argument("--epochs", "-e", type=int, default=50, help="Number of epochs")
+    parser.add_argument("--optimizer", "-o", type=str, default=None, help="Optimizer")
     parser.add_argument("--lr", type=float, default=None, help="Learning rate")
-    parser.add_argument("--optimizer", type=str, default=None, help="Optimizer")
     parser.add_argument("--device", "-d", type=str, default="cuda", help="Device")
+    parser.add_argument(
+        "--augmentations",
+        "-a",
+        type=str,
+        default="half",
+        choices=["none", "half", "full"],
+        help="Augmentations"
+    )
     args = parser.parse_args()
 
     # Create experiment directory
@@ -97,13 +104,13 @@ def main():
 
     # Save metadata
     metadata = {
-        "model": args.model,
-        "scale": scale,
+        "model": f"{args.model}{scale}" if scale else args.model,
+        "preset": args.preset,
         "batch_size": args.batch,
         "epochs": args.epochs,
-        "preset": args.preset,
         "lr": args.lr,
         "optimizer": args.optimizer,
+        "augmentations": args.augmentations,
         "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
     }
     with open(exp_dir / "metadata.json", "w") as f:
@@ -111,15 +118,16 @@ def main():
 
     # Create config
     config = Config(
+        preset=args.preset,
         batch_size=args.batch,
         epochs=args.epochs,
-        preset=args.preset,
         device=args.device,
+        augmentations=args.augmentations,
     )
-    if args.lr:
-        config.lr = args.lr
     if args.optimizer:
         config.optimizer = args.optimizer
+    if args.lr:
+        config.lr = args.lr
 
     config.exp_dir = exp_dir
 

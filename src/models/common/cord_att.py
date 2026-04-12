@@ -7,25 +7,33 @@ class CoordAtt(nn.Module):
         super(CoordAtt, self).__init__()
 
         self.inp = inp
+        self.oup = oup
         self.reduction = reduction
         self.mip = max(8, (inp or 64) // reduction) if inp else 8
 
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        self.conv1 = nn.Identity()  # Will be set dynamically
-        self.bn1 = nn.Identity()
-        self.act = nn.SiLU()
-        self.conv_h = nn.Identity()
-        self.conv_w = nn.Identity()
-        self._built = False
+
+        # Initialize with actual layers since we know inp at construction time
+        if inp is not None and oup is not None:
+            self._build_layers(inp)
+        else:
+            self.conv1 = nn.Identity()
+            self.bn1 = nn.Identity()
+            self.act = nn.SiLU()
+            self.conv_h = nn.Identity()
+            self.conv_w = nn.Identity()
+            self._built = False
 
     def _build_layers(self, inp):
-        if self._built and self.inp == inp:
+        if hasattr(self, "_built") and self._built and self.inp == inp:
             return
         self.inp = inp
         self.mip = max(8, inp // self.reduction)
+
         self.conv1 = nn.Conv2d(inp, self.mip, kernel_size=1, stride=1, padding=0)
         self.bn1 = nn.BatchNorm2d(self.mip)
+        self.act = nn.SiLU()
         self.conv_h = nn.Conv2d(self.mip, inp, kernel_size=1, stride=1, padding=0)
         self.conv_w = nn.Conv2d(self.mip, inp, kernel_size=1, stride=1, padding=0)
         self._built = True
